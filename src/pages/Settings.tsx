@@ -5,22 +5,40 @@ import { toISODate, monthStart } from '../lib/date'
 type Category = { id: string; name: string; color: string | null; is_drinking: boolean; sort_order: number }
 type Budget = { id?: string; category_id: string; budget_amount: number }
 type Template = { id: string; title: string; amount: number; category_id: string | null; day_of_month: number; memo: string | null; is_active: boolean }
+type Expense = { id: string; amount: number; memo: string | null; spent_on: string; categories: { name: string; color: string | null } | null }
+type Suggestion = { category_id: string; suggested_amount: number; months_count: number }
 
-const COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#14b8a6','#f97316','#a855f7']
+const COLORS = [
+  '#3b82f6','#1d4ed8','#0ea5e9','#06b6d4','#0891b2',
+  '#22c55e','#16a34a','#10b981','#14b8a6','#84cc16',
+  '#ef4444','#dc2626','#f43f5e','#ec4899','#db2777',
+  '#f97316','#ea580c','#f59e0b','#d97706','#eab308',
+  '#8b5cf6','#7c3aed','#a855f7','#9333ea','#6366f1',
+  '#64748b','#475569','#6b7280','#78716c','#71717a',
+]
+
+function getNextMonthISO() {
+  const d = new Date()
+  const y = d.getMonth() === 11 ? d.getFullYear() + 1 : d.getFullYear()
+  const m = d.getMonth() === 11 ? 1 : d.getMonth() + 2
+  return `${y}-${String(m).padStart(2, '0')}-01`
+}
 
 export default function Settings() {
-  const [tab, setTab] = useState<'cat'|'budget'|'recurring'>('cat')
+  const [tab, setTab] = useState<'cat' | 'budget' | 'recurring' | 'history'>('cat')
   const [categories, setCategories] = useState<Category[]>([])
   const [budgets, setBudgets] = useState<Budget[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
+  const [expenses, setExpenses] = useState<Expense[]>([])
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [historyMonth, setHistoryMonth] = useState(() => toISODate(monthStart(new Date())))
+  const [historyLoading, setHistoryLoading] = useState(false)
   const monthISO = toISODate(monthStart(new Date()))
+  const NEXT_MONTH_ISO = getNextMonthISO()
 
-  // カテゴリ
   const [newCatName, setNewCatName] = useState('')
   const [newCatDrinking, setNewCatDrinking] = useState(false)
   const [newCatColor, setNewCatColor] = useState(COLORS[0])
-
-  // 固定費
   const [newTpl, setNewTpl] = useState({ title: '', amount: '', category_id: '', day_of_month: '1', memo: '' })
 
   async function loadAll() {
@@ -34,7 +52,29 @@ export default function Settings() {
     setTemplates((tRes.data ?? []) as Template[])
   }
 
+  async function loadSuggestions() {
+    const { data } = await supabase.from('v_budget_suggestion').select('category_id,suggested_amount,months_count')
+    setSuggestions((data ?? []) as Suggestion[])
+  }
+
+  async function loadHistory(month: string) {
+    setHistoryLoading(true)
+    const d = new Date(month)
+    const nextM = new Date(d.getFullYear(), d.getMonth() + 1, 1)
+    const nextISO = `${nextM.getFullYear()}-${String(nextM.getMonth() + 1).padStart(2, '0')}-01`
+    const { data } = await supabase
+      .from('expenses')
+      .select('id,amount,memo,spent_on,categories(name,color)')
+      .gte('spent_on', month)
+      .lt('spent_on', nextISO)
+      .order('spent_on', { ascending: false })
+    setExpenses((data ?? []) as Expense[])
+    setHistoryLoading(false)
+  }
+
   useEffect(() => { loadAll() }, [])
+  useEffect(() => { if (tab === 'budget') loadSuggestions() }, [tab])
+  useEffect(() => { if (tab === 'history') loadHistory(historyMonth) }, [tab, historyMonth])
 
   async function addCategory() {
     if (!newCatName.trim()) return
@@ -60,13 +100,20 @@ export default function Settings() {
     loadAll()
   }
 
+  async function applyNextMonthBudgets() {
+    const { data: { user } } = await supabase.auth.getUser()
+    const rows = suggestions.filter(s => s.suggested_amount > 0).map(s => ({
+      user_id: user!.id, month: NEXT_MONTH_ISO, category_id: s.category_id, budget_amount: Number(s.suggested_amount),
+    }))
+    if (rows.length === 0) { alert('提案データがありません'); return }
+    await supabase.from('budgets').upsert(rows, { onConflict: 'user_id,month,category_id' })
+    alert(`来月(${NEXT_MONTH_ISO.slice(0, 7)})の予算を${rows.length}件設定しました`)
+  }
+
   async function addTemplate() {
     if (!newTpl.title || !newTpl.amount) return
     const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('recurring_templates').insert({
-      user_id: user!.id, title: newTpl.title, amount: Number(newTpl.amount),
-      category_id: newTpl.category_id || null, day_of_month: Number(newTpl.day_of_month), memo: newTpl.memo || null
-    })
+    await supabase.from('recurring_templates').insert({ user_id: user!.id, title: newTpl.title, amount: Number(newTpl.amount), category_id: newTpl.category_id || null, day_of_month: Number(newTpl.day_of_month), memo: newTpl.memo || null })
     setNewTpl({ title: '', amount: '', category_id: '', day_of_month: '1', memo: '' })
     loadAll()
   }
@@ -76,26 +123,28 @@ export default function Settings() {
     loadAll()
   }
 
-  async function signOut() {
-    await supabase.auth.signOut()
+  async function deleteExpense(id: string) {
+    await supabase.from('expenses').delete().eq('id', id)
+    loadHistory(historyMonth)
   }
+
+  const totalHistory = expenses.reduce((s, e) => s + e.amount, 0)
 
   return (
     <div>
       <div className="hrow" style={{ marginBottom: 16, paddingTop: 4 }}>
         <h2 style={{ fontSize: 18, fontWeight: 700 }}>設定</h2>
         <span className="spacer" />
-        <button className="btn" style={{ fontSize: 12 }} onClick={signOut}>ログアウト</button>
+        <button className="btn" style={{ fontSize: 12 }} onClick={() => supabase.auth.signOut()}>ログアウト</button>
       </div>
 
-      {/* タブ */}
-      <div className="hrow" style={{ marginBottom: 16, gap: 6 }}>
-        {[['cat','カテゴリ'],['budget','予算'],['recurring','固定費']] .map(([key, label]) => (
-          <button key={key} className={`btn ${tab === key ? 'primary' : ''}`} style={{ flex: 1, fontSize: 13 }} onClick={() => setTab(key as any)}>{label}</button>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginBottom: 16 }}>
+        {([['cat','カテゴリ'],['budget','予算'],['recurring','固定費'],['history','履歴']] as const).map(([key, label]) => (
+          <button key={key} className={`btn ${tab === key ? 'primary' : ''}`} style={{ fontSize: 12 }} onClick={() => setTab(key)}>{label}</button>
         ))}
       </div>
 
-      {/* カテゴリ管理 */}
+      {/* カテゴリ */}
       {tab === 'cat' && (
         <>
           <div className="card">
@@ -106,17 +155,22 @@ export default function Settings() {
                 <input className="input" placeholder="例: 食費" value={newCatName} onChange={e => setNewCatName(e.target.value)} />
               </div>
               <div>
-                <label>カラー</label>
-                <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                <label>カラー（30色＋カスタム）</label>
+                <div style={{ display: 'flex', gap: 5, marginTop: 6, flexWrap: 'wrap' }}>
                   {COLORS.map(c => (
-                    <div key={c} onClick={() => setNewCatColor(c)}
-                      style={{ width: 28, height: 28, borderRadius: '50%', background: c, cursor: 'pointer', border: newCatColor === c ? '3px solid white' : '3px solid transparent' }} />
+                    <div key={c} onClick={() => setNewCatColor(c)} style={{ width: 24, height: 24, borderRadius: '50%', background: c, cursor: 'pointer', border: newCatColor === c ? '2px solid white' : '2px solid transparent', boxShadow: newCatColor === c ? `0 0 0 2px ${c}` : 'none', flexShrink: 0 }} />
                   ))}
+                </div>
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ width: 18, height: 18, borderRadius: '50%', background: newCatColor, border: '2px solid rgba(255,255,255,0.3)' }} />
+                  <span style={{ fontSize: 12, color: '#94a3b8' }}>{newCatColor}</span>
+                  <input type="color" value={newCatColor} onChange={e => setNewCatColor(e.target.value)} style={{ width: 32, height: 26, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
+                  <span style={{ fontSize: 11, color: '#64748b' }}>カスタム色</span>
                 </div>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                 <input type="checkbox" checked={newCatDrinking} onChange={e => setNewCatDrinking(e.target.checked)} />
-                <span>飲み会費カテゴリ（カレンダーに色付け）</span>
+                <span style={{ fontSize: 13 }}>飲み会費カテゴリ</span>
               </label>
               <button className="btn primary" onClick={addCategory}>追加</button>
             </div>
@@ -126,7 +180,7 @@ export default function Settings() {
             {categories.length === 0 && <p style={{ color: '#94a3b8', fontSize: 13 }}>カテゴリがありません</p>}
             {categories.map(c => (
               <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #1e293b' }}>
-                <div style={{ width: 14, height: 14, borderRadius: '50%', background: c.color ?? '#888', flexShrink: 0 }} />
+                <div style={{ width: 14, height: 14, borderRadius: '50%', background: c.color ?? '#888', flexShrink: 0, border: '2px solid rgba(255,255,255,0.2)' }} />
                 <span style={{ flex: 1, fontSize: 14 }}>{c.name}</span>
                 {c.is_drinking && <span className="badge warn">飲み会</span>}
                 <button className="btn danger" style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => deleteCategory(c.id)}>削除</button>
@@ -136,46 +190,75 @@ export default function Settings() {
         </>
       )}
 
-      {/* 予算管理 */}
+      {/* 予算 */}
       {tab === 'budget' && (
-        <div className="card">
-          <h3 style={{ marginBottom: 4, fontSize: 14 }}>今月の予算設定</h3>
-          <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>入力後、フォーカスを外すと自動保存されます</p>
-          {categories.length === 0 && <p style={{ color: '#94a3b8', fontSize: 13 }}>先にカテゴリを追加してください</p>}
-          {categories.map(c => {
-            const b = budgets.find(x => x.category_id === c.id)
-            return (
-              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #1e293b' }}>
-                <div style={{ width: 10, height: 10, borderRadius: '50%', background: c.color ?? '#888', flexShrink: 0 }} />
-                <span style={{ flex: 1, fontSize: 14 }}>{c.name}</span>
-                <input className="input" type="number" inputMode="numeric" defaultValue={b?.budget_amount ?? ''}
-                  placeholder="予算（円）" style={{ width: 130, textAlign: 'right' }}
-                  onBlur={e => { const v = Number(e.target.value); if (v > 0) saveBudget(c.id, v) }} />
-              </div>
-            )
-          })}
-        </div>
+        <>
+          <div className="card" style={{ borderColor: '#3b82f6' }}>
+            <div className="hrow" style={{ marginBottom: 10 }}>
+              <h3 style={{ fontSize: 14, color: '#3b82f6' }}>💡 来月の予算提案</h3>
+              <span className="spacer" />
+              <span style={{ fontSize: 11, color: '#64748b' }}>過去3ヶ月の平均</span>
+            </div>
+            {suggestions.length === 0
+              ? <p style={{ color: '#94a3b8', fontSize: 13 }}>3ヶ月分の支出データがたまると提案が表示されます</p>
+              : <>
+                {suggestions.map(s => {
+                  const cat = categories.find(c => c.id === s.category_id)
+                  if (!cat) return null
+                  return (
+                    <div key={s.category_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderTop: '1px solid #1e293b' }}>
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: cat.color ?? '#888' }} />
+                      <span style={{ flex: 1, fontSize: 13 }}>{cat.name}</span>
+                      <span style={{ fontSize: 13, color: '#3b82f6', fontWeight: 700 }}>¥{Number(s.suggested_amount).toLocaleString()}</span>
+                      <span style={{ fontSize: 11, color: '#64748b' }}>{s.months_count}ヶ月平均</span>
+                    </div>
+                  )
+                })}
+                <button className="btn primary" style={{ marginTop: 12, width: '100%', fontSize: 13 }} onClick={applyNextMonthBudgets}>
+                  来月（{NEXT_MONTH_ISO.slice(0, 7)}）に一括適用
+                </button>
+              </>
+            }
+          </div>
+          <div className="card">
+            <h3 style={{ marginBottom: 4, fontSize: 14 }}>今月の予算設定</h3>
+            <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>フォーカスを外すと自動保存されます</p>
+            {categories.length === 0 && <p style={{ color: '#94a3b8', fontSize: 13 }}>先にカテゴリを追加してください</p>}
+            {categories.map(c => {
+              const b = budgets.find(x => x.category_id === c.id)
+              return (
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #1e293b' }}>
+                  <div style={{ width: 10, height: 10, borderRadius: '50%', background: c.color ?? '#888' }} />
+                  <span style={{ flex: 1, fontSize: 14 }}>{c.name}</span>
+                  <input className="input" type="number" inputMode="numeric" defaultValue={b?.budget_amount ?? ''} placeholder="予算（円）"
+                    style={{ width: 130, textAlign: 'right' }}
+                    onBlur={e => { const v = Number(e.target.value); if (v > 0) saveBudget(c.id, v) }} />
+                </div>
+              )
+            })}
+          </div>
+        </>
       )}
 
-      {/* 固定費管理 */}
+      {/* 固定費 */}
       {tab === 'recurring' && (
         <>
           <div className="card">
             <h3 style={{ marginBottom: 12, fontSize: 14 }}>固定費テンプレート追加</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div><label>名前</label><input className="input" placeholder="例: 家賃" value={newTpl.title} onChange={e => setNewTpl(p => ({...p, title: e.target.value}))} /></div>
+              <div><label>名前</label><input className="input" placeholder="例: 家賃" value={newTpl.title} onChange={e => setNewTpl(p => ({ ...p, title: e.target.value }))} /></div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div><label>金額</label><input className="input" type="number" value={newTpl.amount} onChange={e => setNewTpl(p => ({...p, amount: e.target.value}))} /></div>
-                <div><label>毎月何日</label><input className="input" type="number" min="1" max="31" value={newTpl.day_of_month} onChange={e => setNewTpl(p => ({...p, day_of_month: e.target.value}))} /></div>
+                <div><label>金額</label><input className="input" type="number" value={newTpl.amount} onChange={e => setNewTpl(p => ({ ...p, amount: e.target.value }))} /></div>
+                <div><label>毎月何日</label><input className="input" type="number" min="1" max="31" value={newTpl.day_of_month} onChange={e => setNewTpl(p => ({ ...p, day_of_month: e.target.value }))} /></div>
               </div>
               <div>
                 <label>カテゴリ</label>
-                <select className="input" value={newTpl.category_id} onChange={e => setNewTpl(p => ({...p, category_id: e.target.value}))}>
+                <select className="input" value={newTpl.category_id} onChange={e => setNewTpl(p => ({ ...p, category_id: e.target.value }))}>
                   <option value="">未分類</option>
                   {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
-              <div><label>メモ（任意）</label><input className="input" value={newTpl.memo} onChange={e => setNewTpl(p => ({...p, memo: e.target.value}))} /></div>
+              <div><label>メモ（任意）</label><input className="input" value={newTpl.memo} onChange={e => setNewTpl(p => ({ ...p, memo: e.target.value }))} /></div>
               <button className="btn primary" onClick={addTemplate}>追加</button>
             </div>
           </div>
@@ -194,6 +277,53 @@ export default function Settings() {
                 <button className="btn danger" style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => deleteTemplate(t.id)}>削除</button>
               </div>
             ))}
+          </div>
+        </>
+      )}
+
+      {/* 履歴 */}
+      {tab === 'history' && (
+        <>
+          <div className="card" style={{ padding: '12px 16px' }}>
+            <div className="hrow">
+              <label style={{ marginBottom: 0, color: '#f1f5f9', flexShrink: 0 }}>表示月</label>
+              <input className="input" type="month" value={historyMonth.slice(0, 7)}
+                onChange={e => setHistoryMonth(e.target.value + '-01')}
+                style={{ flex: 1 }} />
+            </div>
+          </div>
+          <div className="card">
+            <div className="hrow" style={{ marginBottom: 12 }}>
+              <h3 style={{ fontSize: 14 }}>支出履歴</h3>
+              <span className="spacer" />
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6' }}>合計 ¥{totalHistory.toLocaleString()}</span>
+            </div>
+            {historyLoading && <p style={{ color: '#94a3b8', fontSize: 13 }}>読み込み中...</p>}
+            {!historyLoading && expenses.length === 0 && <p style={{ color: '#94a3b8', fontSize: 13 }}>この月の支出はありません</p>}
+            {expenses.map((e, i) => {
+              const prev = expenses[i - 1]
+              const showDate = !prev || prev.spent_on !== e.spent_on
+              return (
+                <React.Fragment key={e.id}>
+                  {showDate && (
+                    <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600, padding: '8px 0 4px', borderTop: i === 0 ? 'none' : '1px solid #1e293b' }}>
+                      {e.spent_on.slice(5).replace('-', '月')}日
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: showDate ? 'none' : '1px solid #0f172a' }}>
+                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: e.categories?.color ?? '#64748b', flexShrink: 0 }} />
+                    <div style={{ flex: 1 }}>
+                      <div className="hrow" style={{ gap: 6 }}>
+                        <span style={{ fontWeight: 600, fontSize: 14 }}>¥{e.amount.toLocaleString()}</span>
+                        <span style={{ fontSize: 12, color: '#94a3b8', background: '#0f172a', padding: '1px 8px', borderRadius: 999 }}>{e.categories?.name ?? '未分類'}</span>
+                      </div>
+                      {e.memo && <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{e.memo}</p>}
+                    </div>
+                    <button className="btn danger" style={{ fontSize: 11, padding: '3px 8px', flexShrink: 0 }} onClick={() => deleteExpense(e.id)}>削除</button>
+                  </div>
+                </React.Fragment>
+              )
+            })}
           </div>
         </>
       )}
