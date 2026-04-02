@@ -39,6 +39,8 @@ export default function Settings() {
   const [newCatName, setNewCatName] = useState('')
   const [newCatDrinking, setNewCatDrinking] = useState(false)
   const [newCatColor, setNewCatColor] = useState(COLORS[0])
+  const [editingCatId, setEditingCatId] = useState<string | null>(null)
+  const [editingColor, setEditingColor] = useState(COLORS[0])
   const [newTpl, setNewTpl] = useState({ title: '', amount: '', category_id: '', day_of_month: '1', memo: '' })
 
   async function loadAll() {
@@ -86,6 +88,12 @@ export default function Settings() {
 
   async function deleteCategory(id: string) {
     await supabase.from('categories').update({ is_active: false }).eq('id', id)
+    loadAll()
+  }
+
+  async function updateCategoryColor(id: string, color: string) {
+    await supabase.from('categories').update({ color }).eq('id', id)
+    setEditingCatId(null)
     loadAll()
   }
 
@@ -179,13 +187,52 @@ export default function Settings() {
             <h3 style={{ marginBottom: 12, fontSize: 14 }}>カテゴリ一覧</h3>
             {categories.length === 0 && <p style={{ color: '#94a3b8', fontSize: 13 }}>カテゴリがありません</p>}
             {categories.map(c => (
-              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #1e293b' }}>
-                <div style={{ width: 14, height: 14, borderRadius: '50%', background: c.color ?? '#888', flexShrink: 0, border: '2px solid rgba(255,255,255,0.2)' }} />
-                <span style={{ flex: 1, fontSize: 14 }}>{c.name}</span>
-                {c.is_drinking && <span className="badge warn">飲み会</span>}
-                <button className="btn danger" style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => deleteCategory(c.id)}>削除</button>
+              <div key={c.id}>
+                {/* カテゴリ行 */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #1e293b' }}>
+                  {/* カラードット（タップで編集モード切替） */}
+                  <div
+                    onClick={() => {
+                      if (editingCatId === c.id) { setEditingCatId(null) }
+                      else { setEditingCatId(c.id); setEditingColor(c.color ?? COLORS[0]) }
+                    }}
+                    style={{ width: 22, height: 22, borderRadius: '50%', background: c.color ?? '#888', flexShrink: 0, cursor: 'pointer', border: editingCatId === c.id ? '2px solid white' : '2px solid rgba(255,255,255,0.2)', boxShadow: editingCatId === c.id ? `0 0 0 2px ${c.color ?? '#888'}` : 'none' }}
+                    title="タップしてカラー編集"
+                  />
+                  <span style={{ flex: 1, fontSize: 14 }}>{c.name}</span>
+                  {c.is_drinking && <span className="badge warn">飲み会</span>}
+                  <button className="btn danger" style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => deleteCategory(c.id)}>削除</button>
+                </div>
+
+                {/* インラインカラー編集パネル */}
+                {editingCatId === c.id && (
+                  <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 10, padding: 12, marginBottom: 8 }}>
+                    <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>「{c.name}」のカラーを選択</p>
+                    {/* 30色パレット */}
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
+                      {COLORS.map(col => (
+                        <div key={col} onClick={() => setEditingColor(col)} style={{ width: 24, height: 24, borderRadius: '50%', background: col, cursor: 'pointer', border: editingColor === col ? '2px solid white' : '2px solid transparent', boxShadow: editingColor === col ? `0 0 0 2px ${col}` : 'none', flexShrink: 0 }} />
+                      ))}
+                    </div>
+                    {/* カスタムカラー */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <div style={{ width: 18, height: 18, borderRadius: '50%', background: editingColor, border: '2px solid rgba(255,255,255,0.3)' }} />
+                      <span style={{ fontSize: 12, color: '#94a3b8' }}>{editingColor}</span>
+                      <input type="color" value={editingColor} onChange={e => setEditingColor(e.target.value)} style={{ width: 32, height: 26, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
+                      <span style={{ fontSize: 11, color: '#64748b' }}>カスタム色</span>
+                    </div>
+                    {/* ボタン */}
+                    <div className="hrow" style={{ gap: 8 }}>
+                      <button className="btn" style={{ flex: 1, fontSize: 13 }} onClick={() => setEditingCatId(null)}>キャンセル</button>
+                      <button className="btn primary" style={{ flex: 1, fontSize: 13 }} onClick={() => updateCategoryColor(c.id, editingColor)}>保存</button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
+            {categories.length > 0 && (
+              <p style={{ fontSize: 11, color: '#475569', marginTop: 8 }}>💡 カラードットをタップするとカラーを変更できます</p>
+            )}
           </div>
         </>
       )}
