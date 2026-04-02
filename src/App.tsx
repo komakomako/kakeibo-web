@@ -2,12 +2,16 @@ import React from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import CalendarPage from './pages/CalendarPage'
+import HistoryPage from './pages/HistoryPage'
 import Settings from './pages/Settings'
 
 export default function App() {
   const nav = useNavigate()
   const loc = useLocation()
-  const tab = loc.pathname === '/calendar' ? 'calendar' : loc.pathname === '/settings' ? 'settings' : 'home'
+  const tab = loc.pathname === '/calendar' ? 'calendar'
+    : loc.pathname === '/history' ? 'history'
+    : loc.pathname === '/settings' ? 'settings'
+    : 'home'
 
   return (
     <>
@@ -15,6 +19,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/history" element={<HistoryPage />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </div>
@@ -24,6 +29,9 @@ export default function App() {
         </button>
         <button className={`nav-item ${tab === 'calendar' ? 'active' : ''}`} onClick={() => nav('/calendar')}>
           <span className="nav-icon">📅</span>カレンダー
+        </button>
+        <button className={`nav-item ${tab === 'history' ? 'active' : ''}`} onClick={() => nav('/history')}>
+          <span className="nav-icon">📋</span>履歴
         </button>
         <button className={`nav-item ${tab === 'settings' ? 'active' : ''}`} onClick={() => nav('/settings')}>
           <span className="nav-icon">⚙️</span>設定

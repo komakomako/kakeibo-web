@@ -1,4 +1,11 @@
 {
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/$1" },
+    { "src": "/assets/(.*)", "dest": "/assets/$1" },
+    { "src": "/icon-(.*)", "dest": "/icon-$1" },
+    { "src": "/manifest.json", "dest": "/manifest.json" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ],
   "crons": [
     {
       "path": "/api/notify",
