@@ -78,7 +78,6 @@ export default function Dashboard() {
           {current.getFullYear()}年{current.getMonth() + 1}月
         </span>
         <button className="btn" onClick={() => setCurrent(new Date(current.getFullYear(), current.getMonth() + 1, 1))}>▶</button>
-        <button className="btn" onClick={csvExport} title="CSV出力" style={{ fontSize: 12 }}>CSV</button>
       </div>
 
       {/* KPIカード */}
