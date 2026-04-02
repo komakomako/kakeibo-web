@@ -5,7 +5,6 @@ import { toISODate, monthStart } from '../lib/date'
 type Category = { id: string; name: string; color: string | null; is_drinking: boolean; sort_order: number }
 type Budget = { id?: string; category_id: string; budget_amount: number }
 type Template = { id: string; title: string; amount: number; category_id: string | null; day_of_month: number; memo: string | null; is_active: boolean }
-type Expense = { id: string; amount: number; memo: string | null; spent_on: string; categories: { name: string; color: string | null } | null }
 type Suggestion = { category_id: string; suggested_amount: number; months_count: number }
 
 const COLORS = [
@@ -25,14 +24,11 @@ function getNextMonthISO() {
 }
 
 export default function Settings() {
-  const [tab, setTab] = useState<'cat' | 'budget' | 'recurring' | 'history'>('cat')
+  const [tab, setTab] = useState<'cat' | 'budget' | 'recurring' | 'csv'>('cat')
   const [categories, setCategories] = useState<Category[]>([])
   const [budgets, setBudgets] = useState<Budget[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
-  const [expenses, setExpenses] = useState<Expense[]>([])
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
-  const [historyMonth, setHistoryMonth] = useState(() => toISODate(monthStart(new Date())))
-  const [historyLoading, setHistoryLoading] = useState(false)
   const monthISO = toISODate(monthStart(new Date()))
   const NEXT_MONTH_ISO = getNextMonthISO()
 
@@ -76,7 +72,6 @@ export default function Settings() {
 
   useEffect(() => { loadAll() }, [])
   useEffect(() => { if (tab === 'budget') loadSuggestions() }, [tab])
-  useEffect(() => { if (tab === 'history') loadHistory(historyMonth) }, [tab, historyMonth])
 
   async function addCategory() {
     if (!newCatName.trim()) return
@@ -131,13 +126,6 @@ export default function Settings() {
     loadAll()
   }
 
-  async function deleteExpense(id: string) {
-    await supabase.from('expenses').delete().eq('id', id)
-    loadHistory(historyMonth)
-  }
-
-  const totalHistory = expenses.reduce((s, e) => s + e.amount, 0)
-
   return (
     <div>
       <div className="hrow" style={{ marginBottom: 16, paddingTop: 4 }}>
@@ -147,7 +135,7 @@ export default function Settings() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginBottom: 16 }}>
-        {([['cat','カテゴリ'],['budget','予算'],['recurring','固定費'],['history','履歴']] as const).map(([key, label]) => (
+        {([['cat','カテゴリ'],['budget','予算'],['recurring','固定費'],['csv','CSV']] as const).map(([key, label]) => (
           <button key={key} className={`btn ${tab === key ? 'primary' : ''}`} style={{ fontSize: 12 }} onClick={() => setTab(key)}>{label}</button>
         ))}
       </div>
@@ -328,52 +316,68 @@ export default function Settings() {
         </>
       )}
 
-      {/* 履歴 */}
-      {tab === 'history' && (
-        <>
-          <div className="card" style={{ padding: '12px 16px' }}>
-            <div className="hrow">
-              <label style={{ marginBottom: 0, color: '#f1f5f9', flexShrink: 0 }}>表示月</label>
-              <input className="input" type="month" value={historyMonth.slice(0, 7)}
-                onChange={e => setHistoryMonth(e.target.value + '-01')}
-                style={{ flex: 1 }} />
-            </div>
-          </div>
-          <div className="card">
-            <div className="hrow" style={{ marginBottom: 12 }}>
-              <h3 style={{ fontSize: 14 }}>支出履歴</h3>
-              <span className="spacer" />
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6' }}>合計 ¥{totalHistory.toLocaleString()}</span>
-            </div>
-            {historyLoading && <p style={{ color: '#94a3b8', fontSize: 13 }}>読み込み中...</p>}
-            {!historyLoading && expenses.length === 0 && <p style={{ color: '#94a3b8', fontSize: 13 }}>この月の支出はありません</p>}
-            {expenses.map((e, i) => {
-              const prev = expenses[i - 1]
-              const showDate = !prev || prev.spent_on !== e.spent_on
-              return (
-                <React.Fragment key={e.id}>
-                  {showDate && (
-                    <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600, padding: '8px 0 4px', borderTop: i === 0 ? 'none' : '1px solid #1e293b' }}>
-                      {e.spent_on.slice(5).replace('-', '月')}日
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderTop: showDate ? 'none' : '1px solid #0f172a' }}>
-                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: e.categories?.color ?? '#64748b', flexShrink: 0 }} />
-                    <div style={{ flex: 1 }}>
-                      <div className="hrow" style={{ gap: 6 }}>
-                        <span style={{ fontWeight: 600, fontSize: 14 }}>¥{e.amount.toLocaleString()}</span>
-                        <span style={{ fontSize: 12, color: '#94a3b8', background: '#0f172a', padding: '1px 8px', borderRadius: 999 }}>{e.categories?.name ?? '未分類'}</span>
-                      </div>
-                      {e.memo && <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{e.memo}</p>}
-                    </div>
-                    <button className="btn danger" style={{ fontSize: 11, padding: '3px 8px', flexShrink: 0 }} onClick={() => deleteExpense(e.id)}>削除</button>
-                  </div>
-                </React.Fragment>
-              )
-            })}
-          </div>
-        </>
+      {/* CSV出力 */}
+      {tab === 'csv' && (
+        <CsvSection categories={categories} />
       )}
+    </div>
+  )
+}
+
+function CsvSection({ categories }: { categories: { id: string; name: string }[] }) {
+  const [csvMonth, setCsvMonth] = useState(() => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  })
+  const [exporting, setExporting] = useState(false)
+
+  async function csvExport() {
+    setExporting(true)
+    const monthISO = csvMonth + '-01'
+    const d = new Date(monthISO)
+    const nextM = new Date(d.getFullYear(), d.getMonth() + 1, 1)
+    const nextISO = `${nextM.getFullYear()}-${String(nextM.getMonth() + 1).padStart(2, '0')}-01`
+    const { data } = await supabase
+      .from('expenses')
+      .select('spent_on,amount,memo,categories(name)')
+      .gte('spent_on', monthISO)
+      .lt('spent_on', nextISO)
+      .order('spent_on')
+    if (!data) { setExporting(false); return }
+    const rows = [['日付', 'カテゴリ', '金額', 'メモ']]
+    for (const r of data as any[]) rows.push([r.spent_on, r.categories?.name ?? '', r.amount, r.memo ?? ''])
+    const csv = rows.map(r => r.join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent('\uFEFF' + csv)
+    a.download = `kakeibo-${csvMonth}.csv`
+    a.click()
+    setExporting(false)
+  }
+
+  return (
+    <div className="card">
+      <h3 style={{ marginBottom: 14, fontSize: 14 }}>CSV出力</h3>
+      <p style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
+        指定した月の支出データをCSVファイルとしてダウンロードします。<br />
+        Excelやスプレッドシートで開けます。
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div>
+          <label>出力する月</label>
+          <input
+            className="input"
+            type="month"
+            value={csvMonth}
+            onChange={e => setCsvMonth(e.target.value)}
+          />
+        </div>
+        <button className="btn primary" onClick={csvExport} disabled={exporting}>
+          {exporting ? 'エクスポート中...' : `${csvMonth} のCSVをダウンロード`}
+        </button>
+      </div>
+      <p style={{ fontSize: 11, color: '#475569', marginTop: 16 }}>
+        出力項目：日付・カテゴリ・金額・メモ（UTF-8 BOM付き）
+      </p>
     </div>
   )
 }
