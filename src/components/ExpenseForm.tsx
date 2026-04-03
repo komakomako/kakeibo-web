@@ -42,17 +42,16 @@ export default function ExpenseForm({ categories, defaultDate, onSaved }: {
         <input className="input" type="number" inputMode="numeric" placeholder="0" value={amount}
           onChange={e => setAmount(e.target.value)} style={{ fontSize: 20, fontWeight: 700 }} />
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <div>
-          <label>カテゴリ</label>
-          <select className="input" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
-            {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div>
-          <label>日付</label>
-          <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
-        </div>
+      <div>
+        <label>カテゴリ</label>
+        <select className="input" value={categoryId} onChange={e => setCategoryId(e.target.value)}>
+          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
+      <div>
+        <label>日付</label>
+        <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)}
+          style={{ WebkitAppearance: 'none', appearance: 'none' }} />
       </div>
       <div>
         <label>メモ（任意）</label>

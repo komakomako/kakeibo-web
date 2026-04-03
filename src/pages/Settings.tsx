@@ -55,21 +55,6 @@ export default function Settings() {
     setSuggestions((data ?? []) as Suggestion[])
   }
 
-  async function loadHistory(month: string) {
-    setHistoryLoading(true)
-    const d = new Date(month)
-    const nextM = new Date(d.getFullYear(), d.getMonth() + 1, 1)
-    const nextISO = `${nextM.getFullYear()}-${String(nextM.getMonth() + 1).padStart(2, '0')}-01`
-    const { data } = await supabase
-      .from('expenses')
-      .select('id,amount,memo,spent_on,categories(name,color)')
-      .gte('spent_on', month)
-      .lt('spent_on', nextISO)
-      .order('spent_on', { ascending: false })
-    setExpenses((data ?? []) as Expense[])
-    setHistoryLoading(false)
-  }
-
   useEffect(() => { loadAll() }, [])
   useEffect(() => { if (tab === 'budget') loadSuggestions() }, [tab])
 
@@ -256,7 +241,16 @@ export default function Settings() {
             }
           </div>
           <div className="card">
-            <h3 style={{ marginBottom: 4, fontSize: 14 }}>今月の予算設定</h3>
+            <div className="hrow" style={{ marginBottom: 4 }}>
+              <h3 style={{ fontSize: 14 }}>今月の予算設定</h3>
+              <span className="spacer" />
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 11, color: '#64748b' }}>予算合計</div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#3b82f6' }}>
+                  ¥{budgets.reduce((s, b) => s + b.budget_amount, 0).toLocaleString()}
+                </div>
+              </div>
+            </div>
             <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>フォーカスを外すと自動保存されます</p>
             {categories.length === 0 && <p style={{ color: '#94a3b8', fontSize: 13 }}>先にカテゴリを追加してください</p>}
             {categories.map(c => {
@@ -271,6 +265,14 @@ export default function Settings() {
                 </div>
               )
             })}
+            {budgets.length > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, padding: '10px 0 2px', borderTop: '1px solid #334155', marginTop: 4 }}>
+                <span style={{ fontSize: 13, color: '#94a3b8' }}>合計</span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: '#3b82f6' }}>
+                  ¥{budgets.reduce((s, b) => s + b.budget_amount, 0).toLocaleString()}
+                </span>
+              </div>
+            )}
           </div>
         </>
       )}
