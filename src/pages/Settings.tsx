@@ -299,10 +299,8 @@ export default function Settings() {
             <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>旅行・イベントなど特定日の大きな支出を事前に確保。「今日使っていい金額」の計算から除外されます。</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div><label>名前</label><input className="input" placeholder="例: 旅行費" value={newAlloc.label} onChange={e => setNewAlloc(p => ({ ...p, label: e.target.value }))} /></div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div><label>金額</label><input className="input" type="number" value={newAlloc.amount} onChange={e => setNewAlloc(p => ({ ...p, amount: e.target.value }))} /></div>
-                <div><label>予定日</label><input className="input" type="date" value={newAlloc.allocated_date} onChange={e => setNewAlloc(p => ({ ...p, allocated_date: e.target.value }))} /></div>
-              </div>
+              <div><label>金額</label><input className="input" type="number" value={newAlloc.amount} onChange={e => setNewAlloc(p => ({ ...p, amount: e.target.value }))} /></div>
+              <div><label>予定日</label><input className="input" type="date" value={newAlloc.allocated_date} onChange={e => setNewAlloc(p => ({ ...p, allocated_date: e.target.value }))} /></div>
               <div>
                 <label>カテゴリ（任意）</label>
                 <select className="input" value={newAlloc.category_id} onChange={e => setNewAlloc(p => ({ ...p, category_id: e.target.value }))}>
