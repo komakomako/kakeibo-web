@@ -2,19 +2,13 @@ import React, { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { toISODate, monthStart } from '../lib/date'
 
-type Category = { id: string; name: string; color: string | null; is_drinking: boolean; sort_order: number }
+type Category = { id: string; name: string; color: string | null; is_drinking: boolean; sort_order: number; exclude_from_daily: boolean; is_food: boolean }
 type Budget = { id?: string; category_id: string; budget_amount: number }
-type Template = { id: string; title: string; amount: number; category_id: string | null; day_of_month: number; memo: string | null; is_active: boolean }
+type Template = { id: string; title: string; amount: number; category_id: string | null; day_of_month: number; memo: string | null }
 type Suggestion = { category_id: string; suggested_amount: number; months_count: number }
+type Allocation = { id: string; category_id: string | null; label: string; amount: number; allocated_date: string }
 
-const COLORS = [
-  '#3b82f6','#1d4ed8','#0ea5e9','#06b6d4','#0891b2',
-  '#22c55e','#16a34a','#10b981','#14b8a6','#84cc16',
-  '#ef4444','#dc2626','#f43f5e','#ec4899','#db2777',
-  '#f97316','#ea580c','#f59e0b','#d97706','#eab308',
-  '#8b5cf6','#7c3aed','#a855f7','#9333ea','#6366f1',
-  '#64748b','#475569','#6b7280','#78716c','#71717a',
-]
+const COLORS = ['#3b82f6','#1d4ed8','#0ea5e9','#06b6d4','#0891b2','#22c55e','#16a34a','#10b981','#14b8a6','#84cc16','#ef4444','#dc2626','#f43f5e','#ec4899','#db2777','#f97316','#ea580c','#f59e0b','#d97706','#eab308','#8b5cf6','#7c3aed','#a855f7','#9333ea','#6366f1','#64748b','#475569','#6b7280','#78716c','#71717a']
 
 function getNextMonthISO() {
   const d = new Date()
@@ -29,25 +23,34 @@ export default function Settings() {
   const [budgets, setBudgets] = useState<Budget[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [allocations, setAllocations] = useState<Allocation[]>([])
   const monthISO = toISODate(monthStart(new Date()))
   const NEXT_MONTH_ISO = getNextMonthISO()
 
+  // カテゴリ追加
   const [newCatName, setNewCatName] = useState('')
   const [newCatDrinking, setNewCatDrinking] = useState(false)
   const [newCatColor, setNewCatColor] = useState(COLORS[0])
   const [editingCatId, setEditingCatId] = useState<string | null>(null)
   const [editingColor, setEditingColor] = useState(COLORS[0])
+
+  // 固定費
   const [newTpl, setNewTpl] = useState({ title: '', amount: '', category_id: '', day_of_month: '1', memo: '' })
 
+  // 3. 割り当て
+  const [newAlloc, setNewAlloc] = useState({ label: '', amount: '', category_id: '', allocated_date: '' })
+
   async function loadAll() {
-    const [cRes, bRes, tRes] = await Promise.all([
-      supabase.from('categories').select('id,name,color,is_drinking,sort_order').eq('is_active', true).order('sort_order'),
+    const [cRes, bRes, tRes, aRes] = await Promise.all([
+      supabase.from('categories').select('id,name,color,is_drinking,sort_order,exclude_from_daily,is_food').eq('is_active', true).order('sort_order'),
       supabase.from('budgets').select('id,category_id,budget_amount').eq('month', monthISO),
       supabase.from('recurring_templates').select('*').eq('is_active', true).order('day_of_month'),
+      supabase.from('budget_allocations').select('id,category_id,label,amount,allocated_date').eq('month', monthISO).order('allocated_date'),
     ])
     setCategories((cRes.data ?? []) as Category[])
     setBudgets((bRes.data ?? []) as Budget[])
     setTemplates((tRes.data ?? []) as Template[])
+    setAllocations((aRes.data ?? []) as Allocation[])
   }
 
   async function loadSuggestions() {
@@ -73,7 +76,18 @@ export default function Settings() {
 
   async function updateCategoryColor(id: string, color: string) {
     await supabase.from('categories').update({ color }).eq('id', id)
-    setEditingCatId(null)
+    setEditingCatId(null); loadAll()
+  }
+
+  async function toggleExcludeFromDaily(id: string, current: boolean) {
+    await supabase.from('categories').update({ exclude_from_daily: !current }).eq('id', id)
+    loadAll()
+  }
+
+  async function toggleIsFood(id: string, current: boolean) {
+    // 食費は1つだけ設定可能
+    if (!current) await supabase.from('categories').update({ is_food: false }).neq('id', id)
+    await supabase.from('categories').update({ is_food: !current }).eq('id', id)
     loadAll()
   }
 
@@ -90,12 +104,28 @@ export default function Settings() {
 
   async function applyNextMonthBudgets() {
     const { data: { user } } = await supabase.auth.getUser()
-    const rows = suggestions.filter(s => s.suggested_amount > 0).map(s => ({
-      user_id: user!.id, month: NEXT_MONTH_ISO, category_id: s.category_id, budget_amount: Number(s.suggested_amount),
-    }))
+    const rows = suggestions.filter(s => s.suggested_amount > 0).map(s => ({ user_id: user!.id, month: NEXT_MONTH_ISO, category_id: s.category_id, budget_amount: Number(s.suggested_amount) }))
     if (rows.length === 0) { alert('提案データがありません'); return }
     await supabase.from('budgets').upsert(rows, { onConflict: 'user_id,month,category_id' })
     alert(`来月(${NEXT_MONTH_ISO.slice(0, 7)})の予算を${rows.length}件設定しました`)
+  }
+
+  // 3. 割り当て追加
+  async function addAllocation() {
+    if (!newAlloc.label || !newAlloc.amount || !newAlloc.allocated_date) return
+    const { data: { user } } = await supabase.auth.getUser()
+    await supabase.from('budget_allocations').upsert({
+      user_id: user!.id, month: monthISO, label: newAlloc.label,
+      amount: Number(newAlloc.amount), category_id: newAlloc.category_id || null,
+      allocated_date: newAlloc.allocated_date,
+    }, { onConflict: 'user_id,month,label' })
+    setNewAlloc({ label: '', amount: '', category_id: '', allocated_date: '' })
+    loadAll()
+  }
+
+  async function deleteAllocation(id: string) {
+    await supabase.from('budget_allocations').delete().eq('id', id)
+    loadAll()
   }
 
   async function addTemplate() {
@@ -110,6 +140,9 @@ export default function Settings() {
     await supabase.from('recurring_templates').update({ is_active: false }).eq('id', id)
     loadAll()
   }
+
+  const budgetTotal = budgets.reduce((s, b) => s + b.budget_amount, 0)
+  const allocTotal = allocations.reduce((s, a) => s + a.amount, 0)
 
   return (
     <div>
@@ -131,22 +164,16 @@ export default function Settings() {
           <div className="card">
             <h3 style={{ marginBottom: 12, fontSize: 14 }}>新規カテゴリ追加</h3>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div>
-                <label>カテゴリ名</label>
-                <input className="input" placeholder="例: 食費" value={newCatName} onChange={e => setNewCatName(e.target.value)} />
-              </div>
+              <div><label>カテゴリ名</label><input className="input" placeholder="例: 食費" value={newCatName} onChange={e => setNewCatName(e.target.value)} /></div>
               <div>
                 <label>カラー（30色＋カスタム）</label>
                 <div style={{ display: 'flex', gap: 5, marginTop: 6, flexWrap: 'wrap' }}>
-                  {COLORS.map(c => (
-                    <div key={c} onClick={() => setNewCatColor(c)} style={{ width: 24, height: 24, borderRadius: '50%', background: c, cursor: 'pointer', border: newCatColor === c ? '2px solid white' : '2px solid transparent', boxShadow: newCatColor === c ? `0 0 0 2px ${c}` : 'none', flexShrink: 0 }} />
-                  ))}
+                  {COLORS.map(c => <div key={c} onClick={() => setNewCatColor(c)} style={{ width: 24, height: 24, borderRadius: '50%', background: c, cursor: 'pointer', border: newCatColor === c ? '2px solid white' : '2px solid transparent', boxShadow: newCatColor === c ? `0 0 0 2px ${c}` : 'none', flexShrink: 0 }} />)}
                 </div>
                 <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                   <div style={{ width: 18, height: 18, borderRadius: '50%', background: newCatColor, border: '2px solid rgba(255,255,255,0.3)' }} />
                   <span style={{ fontSize: 12, color: '#94a3b8' }}>{newCatColor}</span>
                   <input type="color" value={newCatColor} onChange={e => setNewCatColor(e.target.value)} style={{ width: 32, height: 26, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
-                  <span style={{ fontSize: 11, color: '#64748b' }}>カスタム色</span>
                 </div>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
@@ -157,55 +184,44 @@ export default function Settings() {
             </div>
           </div>
           <div className="card">
-            <h3 style={{ marginBottom: 12, fontSize: 14 }}>カテゴリ一覧</h3>
+            <h3 style={{ marginBottom: 4, fontSize: 14 }}>カテゴリ一覧</h3>
+            <p style={{ fontSize: 11, color: '#475569', marginBottom: 10 }}>💡 ドットをタップしてカラー変更 / トグルで日常計算・食費フラグを設定</p>
             {categories.length === 0 && <p style={{ color: '#94a3b8', fontSize: 13 }}>カテゴリがありません</p>}
             {categories.map(c => (
               <div key={c.id}>
-                {/* カテゴリ行 */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #1e293b' }}>
-                  {/* カラードット（タップで編集モード切替） */}
-                  <div
-                    onClick={() => {
-                      if (editingCatId === c.id) { setEditingCatId(null) }
-                      else { setEditingCatId(c.id); setEditingColor(c.color ?? COLORS[0]) }
-                    }}
-                    style={{ width: 22, height: 22, borderRadius: '50%', background: c.color ?? '#888', flexShrink: 0, cursor: 'pointer', border: editingCatId === c.id ? '2px solid white' : '2px solid rgba(255,255,255,0.2)', boxShadow: editingCatId === c.id ? `0 0 0 2px ${c.color ?? '#888'}` : 'none' }}
-                    title="タップしてカラー編集"
-                  />
-                  <span style={{ flex: 1, fontSize: 14 }}>{c.name}</span>
-                  {c.is_drinking && <span className="badge warn">飲み会</span>}
-                  <button className="btn danger" style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => deleteCategory(c.id)}>削除</button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderTop: '1px solid #1e293b' }}>
+                  <div onClick={() => { if (editingCatId === c.id) { setEditingCatId(null) } else { setEditingCatId(c.id); setEditingColor(c.color ?? COLORS[0]) } }}
+                    style={{ width: 20, height: 20, borderRadius: '50%', background: c.color ?? '#888', flexShrink: 0, cursor: 'pointer', border: editingCatId === c.id ? '2px solid white' : '2px solid rgba(255,255,255,0.2)' }} />
+                  <span style={{ flex: 1, fontSize: 13 }}>{c.name}</span>
+                  {/* 5. 食費フラグ */}
+                  <button onClick={() => toggleIsFood(c.id, c.is_food)}
+                    style={{ fontSize: 10, padding: '2px 6px', borderRadius: 6, border: 'none', cursor: 'pointer', background: c.is_food ? '#f59e0b' : '#1e293b', color: c.is_food ? '#000' : '#64748b' }}>
+                    🍚食費
+                  </button>
+                  {/* 5. 日常計算除外フラグ */}
+                  <button onClick={() => toggleExcludeFromDaily(c.id, c.exclude_from_daily)}
+                    style={{ fontSize: 10, padding: '2px 6px', borderRadius: 6, border: 'none', cursor: 'pointer', background: c.exclude_from_daily ? '#ef4444' : '#1e293b', color: c.exclude_from_daily ? '#fff' : '#64748b' }}>
+                    除外
+                  </button>
+                  <button className="btn danger" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => deleteCategory(c.id)}>削除</button>
                 </div>
-
-                {/* インラインカラー編集パネル */}
                 {editingCatId === c.id && (
                   <div style={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 10, padding: 12, marginBottom: 8 }}>
-                    <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>「{c.name}」のカラーを選択</p>
-                    {/* 30色パレット */}
-                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
-                      {COLORS.map(col => (
-                        <div key={col} onClick={() => setEditingColor(col)} style={{ width: 24, height: 24, borderRadius: '50%', background: col, cursor: 'pointer', border: editingColor === col ? '2px solid white' : '2px solid transparent', boxShadow: editingColor === col ? `0 0 0 2px ${col}` : 'none', flexShrink: 0 }} />
-                      ))}
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 8 }}>
+                      {COLORS.map(col => <div key={col} onClick={() => setEditingColor(col)} style={{ width: 22, height: 22, borderRadius: '50%', background: col, cursor: 'pointer', border: editingColor === col ? '2px solid white' : '2px solid transparent', flexShrink: 0 }} />)}
                     </div>
-                    {/* カスタムカラー */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                      <div style={{ width: 18, height: 18, borderRadius: '50%', background: editingColor, border: '2px solid rgba(255,255,255,0.3)' }} />
-                      <span style={{ fontSize: 12, color: '#94a3b8' }}>{editingColor}</span>
-                      <input type="color" value={editingColor} onChange={e => setEditingColor(e.target.value)} style={{ width: 32, height: 26, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
-                      <span style={{ fontSize: 11, color: '#64748b' }}>カスタム色</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <div style={{ width: 16, height: 16, borderRadius: '50%', background: editingColor }} />
+                      <input type="color" value={editingColor} onChange={e => setEditingColor(e.target.value)} style={{ width: 32, height: 24, border: 'none', background: 'none', cursor: 'pointer', padding: 0 }} />
                     </div>
-                    {/* ボタン */}
                     <div className="hrow" style={{ gap: 8 }}>
-                      <button className="btn" style={{ flex: 1, fontSize: 13 }} onClick={() => setEditingCatId(null)}>キャンセル</button>
-                      <button className="btn primary" style={{ flex: 1, fontSize: 13 }} onClick={() => updateCategoryColor(c.id, editingColor)}>保存</button>
+                      <button className="btn" style={{ flex: 1, fontSize: 12 }} onClick={() => setEditingCatId(null)}>キャンセル</button>
+                      <button className="btn primary" style={{ flex: 1, fontSize: 12 }} onClick={() => updateCategoryColor(c.id, editingColor)}>保存</button>
                     </div>
                   </div>
                 )}
               </div>
             ))}
-            {categories.length > 0 && (
-              <p style={{ fontSize: 11, color: '#475569', marginTop: 8 }}>💡 カラードットをタップするとカラーを変更できます</p>
-            )}
           </div>
         </>
       )}
@@ -213,6 +229,7 @@ export default function Settings() {
       {/* 予算 */}
       {tab === 'budget' && (
         <>
+          {/* 来月提案 */}
           <div className="card" style={{ borderColor: '#3b82f6' }}>
             <div className="hrow" style={{ marginBottom: 10 }}>
               <h3 style={{ fontSize: 14, color: '#3b82f6' }}>💡 来月の予算提案</h3>
@@ -240,37 +257,72 @@ export default function Settings() {
               </>
             }
           </div>
+
+          {/* 今月予算 */}
           <div className="card">
             <div className="hrow" style={{ marginBottom: 4 }}>
               <h3 style={{ fontSize: 14 }}>今月の予算設定</h3>
               <span className="spacer" />
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: 11, color: '#64748b' }}>予算合計</div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: '#3b82f6' }}>
-                  ¥{budgets.reduce((s, b) => s + b.budget_amount, 0).toLocaleString()}
-                </div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: '#3b82f6' }}>¥{budgetTotal.toLocaleString()}</div>
               </div>
             </div>
             <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>フォーカスを外すと自動保存されます</p>
-            {categories.length === 0 && <p style={{ color: '#94a3b8', fontSize: 13 }}>先にカテゴリを追加してください</p>}
             {categories.map(c => {
               const b = budgets.find(x => x.category_id === c.id)
               return (
                 <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderTop: '1px solid #1e293b' }}>
                   <div style={{ width: 10, height: 10, borderRadius: '50%', background: c.color ?? '#888' }} />
-                  <span style={{ flex: 1, fontSize: 14 }}>{c.name}</span>
+                  <span style={{ flex: 1, fontSize: 13 }}>{c.name}</span>
+                  {c.exclude_from_daily && <span style={{ fontSize: 10, color: '#ef4444' }}>除外</span>}
+                  {c.is_food && <span style={{ fontSize: 10, color: '#f59e0b' }}>🍚</span>}
                   <input className="input" type="number" inputMode="numeric" defaultValue={b?.budget_amount ?? ''} placeholder="予算（円）"
-                    style={{ width: 130, textAlign: 'right' }}
+                    style={{ width: 120, textAlign: 'right' }}
                     onBlur={e => { const v = Number(e.target.value); if (v > 0) saveBudget(c.id, v) }} />
                 </div>
               )
             })}
             {budgets.length > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, padding: '10px 0 2px', borderTop: '1px solid #334155', marginTop: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '10px 0 2px', borderTop: '1px solid #334155', marginTop: 4 }}>
                 <span style={{ fontSize: 13, color: '#94a3b8' }}>合計</span>
-                <span style={{ fontSize: 16, fontWeight: 700, color: '#3b82f6' }}>
-                  ¥{budgets.reduce((s, b) => s + b.budget_amount, 0).toLocaleString()}
-                </span>
+                <span style={{ fontSize: 16, fontWeight: 700, color: '#3b82f6' }}>¥{budgetTotal.toLocaleString()}</span>
+              </div>
+            )}
+          </div>
+
+          {/* 3. 日付指定割り当て */}
+          <div className="card" style={{ borderColor: '#8b5cf6' }}>
+            <div className="hrow" style={{ marginBottom: 10 }}>
+              <h3 style={{ fontSize: 14, color: '#8b5cf6' }}>📌 特別支出の事前割り当て</h3>
+            </div>
+            <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>旅行・イベントなど特定日の大きな支出を事前に確保。「今日使っていい金額」の計算から除外されます。</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div><label>名前</label><input className="input" placeholder="例: 旅行費" value={newAlloc.label} onChange={e => setNewAlloc(p => ({ ...p, label: e.target.value }))} /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div><label>金額</label><input className="input" type="number" value={newAlloc.amount} onChange={e => setNewAlloc(p => ({ ...p, amount: e.target.value }))} /></div>
+                <div><label>予定日</label><input className="input" type="date" value={newAlloc.allocated_date} onChange={e => setNewAlloc(p => ({ ...p, allocated_date: e.target.value }))} /></div>
+              </div>
+              <div>
+                <label>カテゴリ（任意）</label>
+                <select className="input" value={newAlloc.category_id} onChange={e => setNewAlloc(p => ({ ...p, category_id: e.target.value }))}>
+                  <option value="">未分類</option>
+                  {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <button className="btn primary" style={{ background: '#8b5cf6', borderColor: '#8b5cf6' }} onClick={addAllocation}>割り当てを追加</button>
+            </div>
+            {allocations.length > 0 && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>登録済み割り当て（合計 ¥{allocTotal.toLocaleString()}）</div>
+                {allocations.map(a => (
+                  <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderTop: '1px solid #1e293b' }}>
+                    <span style={{ fontSize: 12, color: '#94a3b8', flexShrink: 0 }}>{a.allocated_date.slice(5).replace('-', '/')}</span>
+                    <span style={{ flex: 1, fontSize: 13 }}>{a.label}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#8b5cf6' }}>¥{a.amount.toLocaleString()}</span>
+                    <button className="btn danger" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => deleteAllocation(a.id)}>削除</button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -288,8 +340,7 @@ export default function Settings() {
                 <div><label>金額</label><input className="input" type="number" value={newTpl.amount} onChange={e => setNewTpl(p => ({ ...p, amount: e.target.value }))} /></div>
                 <div><label>毎月何日</label><input className="input" type="number" min="1" max="31" value={newTpl.day_of_month} onChange={e => setNewTpl(p => ({ ...p, day_of_month: e.target.value }))} /></div>
               </div>
-              <div>
-                <label>カテゴリ</label>
+              <div><label>カテゴリ</label>
                 <select className="input" value={newTpl.category_id} onChange={e => setNewTpl(p => ({ ...p, category_id: e.target.value }))}>
                   <option value="">未分類</option>
                   {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -318,15 +369,13 @@ export default function Settings() {
         </>
       )}
 
-      {/* CSV出力 */}
-      {tab === 'csv' && (
-        <CsvSection categories={categories} />
-      )}
+      {/* CSV */}
+      {tab === 'csv' && <CsvSection />}
     </div>
   )
 }
 
-function CsvSection({ categories }: { categories: { id: string; name: string }[] }) {
+function CsvSection() {
   const [csvMonth, setCsvMonth] = useState(() => {
     const d = new Date()
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -339,12 +388,7 @@ function CsvSection({ categories }: { categories: { id: string; name: string }[]
     const d = new Date(monthISO)
     const nextM = new Date(d.getFullYear(), d.getMonth() + 1, 1)
     const nextISO = `${nextM.getFullYear()}-${String(nextM.getMonth() + 1).padStart(2, '0')}-01`
-    const { data } = await supabase
-      .from('expenses')
-      .select('spent_on,amount,memo,categories(name)')
-      .gte('spent_on', monthISO)
-      .lt('spent_on', nextISO)
-      .order('spent_on')
+    const { data } = await supabase.from('expenses').select('spent_on,amount,memo,categories(name)').gte('spent_on', monthISO).lt('spent_on', nextISO).order('spent_on')
     if (!data) { setExporting(false); return }
     const rows = [['日付', 'カテゴリ', '金額', 'メモ']]
     for (const r of data as any[]) rows.push([r.spent_on, r.categories?.name ?? '', r.amount, r.memo ?? ''])
@@ -359,27 +403,12 @@ function CsvSection({ categories }: { categories: { id: string; name: string }[]
   return (
     <div className="card">
       <h3 style={{ marginBottom: 14, fontSize: 14 }}>CSV出力</h3>
-      <p style={{ fontSize: 13, color: '#94a3b8', marginBottom: 16 }}>
-        指定した月の支出データをCSVファイルとしてダウンロードします。<br />
-        Excelやスプレッドシートで開けます。
-      </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div>
-          <label>出力する月</label>
-          <input
-            className="input"
-            type="month"
-            value={csvMonth}
-            onChange={e => setCsvMonth(e.target.value)}
-          />
-        </div>
+        <div><label>出力する月</label><input className="input" type="month" value={csvMonth} onChange={e => setCsvMonth(e.target.value)} /></div>
         <button className="btn primary" onClick={csvExport} disabled={exporting}>
           {exporting ? 'エクスポート中...' : `${csvMonth} のCSVをダウンロード`}
         </button>
       </div>
-      <p style={{ fontSize: 11, color: '#475569', marginTop: 16 }}>
-        出力項目：日付・カテゴリ・金額・メモ（UTF-8 BOM付き）
-      </p>
     </div>
   )
 }

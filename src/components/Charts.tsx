@@ -29,15 +29,23 @@ export default function Charts({ monthISO, categories, spentByCat }: {
       })
   }, [monthISO])
 
+  const totalSpent = spentByCat.reduce((s, r) => s + r.spent_amount, 0)
+  const hasData = spentByCat.some(s => s.spent_amount > 0)
+
+  const catData = categories
+    .map((c, i) => ({ c, i, s: spentByCat.find(x => x.category_id === c.id)?.spent_amount ?? 0 }))
+    .filter(x => x.s > 0)
+
   const pieData = {
-    labels: categories.map(c => c.name),
+    labels: catData.map(x => {
+      const pct = totalSpent > 0 ? Math.round(x.s * 100 / totalSpent) : 0
+      return `${x.c.name} ${pct}%`
+    }),
     datasets: [{
-      data: categories.map(c => {
-        const s = spentByCat.find(x => x.category_id === c.id)
-        return s?.spent_amount ?? 0
-      }),
-      backgroundColor: categories.map((c, i) => c.color || COLORS[i % COLORS.length]),
-      borderWidth: 0,
+      data: catData.map(x => x.s),
+      backgroundColor: catData.map(x => x.c.color || COLORS[x.i % COLORS.length]),
+      borderWidth: 2,
+      borderColor: '#0f172a',
     }]
   }
 
@@ -54,27 +62,41 @@ export default function Charts({ monthISO, categories, spentByCat }: {
     }]
   }
 
-  const chartOptions = {
+  const pieOptions = {
     responsive: true,
-    plugins: { legend: { labels: { color: '#94a3b8', font: { size: 12 } } } },
+    plugins: {
+      legend: {
+        position: 'bottom' as const,
+        labels: { color: '#94a3b8', font: { size: 11 }, padding: 10, boxWidth: 12 }
+      },
+      tooltip: {
+        callbacks: {
+          label: (ctx: any) => `¥${ctx.raw.toLocaleString()}`
+        }
+      }
+    }
   }
+
   const lineOptions = {
-    ...chartOptions,
+    responsive: true,
+    plugins: { legend: { display: false } },
     scales: {
       x: { ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { color: '#1e293b' } },
       y: { ticks: { color: '#94a3b8', font: { size: 11 }, callback: (v: any) => `¥${Number(v).toLocaleString()}` }, grid: { color: '#1e293b' } },
     }
   }
 
-  const hasData = spentByCat.some(s => s.spent_amount > 0)
-
   return (
     <>
       {hasData && (
         <div className="card">
-          <h3 style={{ marginBottom: 12, fontSize: 14 }}>カテゴリ別内訳</h3>
-          <div style={{ maxWidth: 280, margin: '0 auto' }}>
-            <Pie data={pieData} options={chartOptions} />
+          <div className="hrow" style={{ marginBottom: 12 }}>
+            <h3 style={{ fontSize: 14 }}>カテゴリ別内訳</h3>
+            <span className="spacer" />
+            <span style={{ fontSize: 13, color: '#94a3b8' }}>合計 ¥{totalSpent.toLocaleString()}</span>
+          </div>
+          <div style={{ maxWidth: 300, margin: '0 auto' }}>
+            <Pie data={pieData} options={pieOptions} />
           </div>
         </div>
       )}
