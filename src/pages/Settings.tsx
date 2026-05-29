@@ -300,7 +300,12 @@ export default function Settings() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div><label>名前</label><input className="input" placeholder="例: 旅行費" value={newAlloc.label} onChange={e => setNewAlloc(p => ({ ...p, label: e.target.value }))} /></div>
               <div><label>金額</label><input className="input" type="number" value={newAlloc.amount} onChange={e => setNewAlloc(p => ({ ...p, amount: e.target.value }))} /></div>
-              <div><label>予定日</label><input className="input" type="date" value={newAlloc.allocated_date} onChange={e => setNewAlloc(p => ({ ...p, allocated_date: e.target.value }))} /></div>
+              <div>
+                <label>予定日</label>
+                <input className="input" type="date" value={newAlloc.allocated_date}
+                  onChange={e => setNewAlloc(p => ({ ...p, allocated_date: e.target.value }))}
+                  style={{ height: 44, lineHeight: '44px', WebkitAppearance: 'none', appearance: 'none' }} />
+              </div>
               <div>
                 <label>カテゴリ（任意）</label>
                 <select className="input" value={newAlloc.category_id} onChange={e => setNewAlloc(p => ({ ...p, category_id: e.target.value }))}>

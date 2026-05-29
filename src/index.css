@@ -65,8 +65,16 @@ body {
   font-size: 15px;
   outline: none;
   margin-top: 4px;
+  /* iOS Safari で date/month 入力欄の高さを統一 */
+  min-height: 44px;
+  height: 44px;
+  -webkit-appearance: none;
+  appearance: none;
 }
 .input:focus { border-color: var(--blue); }
+
+/* select は高さを少し緩める */
+select.input { height: auto; min-height: 44px; }
 
 .btn {
   background: var(--bg2);
